@@ -15,7 +15,7 @@ from google.genai._interactions import APIConnectionError, APIStatusError
 from .media import actual_mime
 from .questions import CONTEXT_HEADER, INPUT_PREAMBLE, SIGNS, USER_NOTE_HEADER, build_questions
 from .ratelimit import Limits, RateLimiter, client_ip, trusted_proxies_from_env
-from .verdict import Answers, Context, decide
+from .verdict import SMS_FROM_VALUES, Answers, Context, decide
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 log = logging.getLogger("scamcheck")
@@ -107,9 +107,9 @@ async def read_limited(upload: UploadFile) -> bytes:
     return data
 
 
-def _yes_no(value: str) -> str | None:
+def _yes_no(value: str, allowed: tuple[str, ...] = ("yes", "no")) -> str | None:
     value = value.strip().lower()
-    return value if value in ("yes", "no") else None
+    return value if value in allowed else None
 
 
 def build_input(text: str, context: Context, mime: str | None = None, data: bytes | None = None) -> list[dict]:
@@ -153,6 +153,7 @@ async def check(
     saved_contact: str = Form(""),
     relayed: str = Form(""),
     confirmed_by_call: str = Form(""),
+    sms_from: str = Form(""),
 ) -> dict:
     text = text.strip()
     if not text and file is None:
@@ -170,7 +171,10 @@ async def check(
         )
 
     context = Context(
-        saved_contact=_yes_no(saved_contact), relayed=_yes_no(relayed), confirmed_by_call=_yes_no(confirmed_by_call)
+        saved_contact=_yes_no(saved_contact),
+        relayed=_yes_no(relayed),
+        confirmed_by_call=_yes_no(confirmed_by_call),
+        sms_from=_yes_no(sms_from, SMS_FROM_VALUES),
     )
     mime = data = None
     if file is not None:

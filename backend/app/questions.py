@@ -15,6 +15,58 @@ The questions fall into four parts:
      "identity" - whether you can trust who they say they are
 """
 
+# Official websites, so genuine alerts that link to them aren't flagged. An address counts
+# only when it ends with one of these: "netbanking.hdfc.bank.in" is official,
+# "hdfc.bank.in.kyc-update.com" and "hdfc-bank.in" are not.
+# Since 31 Oct 2025 RBI requires every bank to use .bank.in, and only licensed banks can
+# register one, so the whole ending is trusted. Current bank addresses are listed by RBI
+# at https://rbi.org.in/scripts/banklinks.aspx; the older ones below are still used in SMS.
+OFFICIAL_ENDINGS = {
+    ".bank.in": "any bank licensed by RBI",
+    ".gov.in": "Indian government (incometax, uidai, epfindia, indiapost, cybercrime, and others)",
+    ".nic.in": "Indian government",
+    ".sbi": "State Bank of India",
+}
+OFFICIAL_WEBSITES: dict[str, list[str]] = {
+    # From RBI's list (Feb 2026). Every .bank.in address is official; these are the ones people see most.
+    "Banks (current .bank.in addresses)": [
+        "sbi.bank.in", "hdfc.bank.in", "icici.bank.in", "axis.bank.in", "kotak.bank.in", "pnb.bank.in",
+        "bankofbaroda.bank.in", "canarabank.bank.in", "unionbankonline.bank.in", "bankofindia.bank.in",
+        "indianbank.bank.in", "iob.bank.in", "uco.bank.in", "centralbank.bank.in", "idbi.bank.in",
+        "idfcfirst.bank.in", "indusind.bank.in", "yes.bank.in", "rbl.bank.in", "federal.bank.in", "au.bank.in",
+        "bandhan.bank.in", "ippbonline.bank.in", "airtelpayments.bank.in", "paytm.bank.in", "sc.bank.in",
+        "hsbc.bank.in",
+    ],
+    "Banks (older addresses)": [
+        "sbi.co.in", "onlinesbi.sbi", "hdfcbank.com", "icicibank.com", "axisbank.com", "kotak.com",
+        "pnbindia.in", "bankofbaroda.in", "canarabank.com", "unionbankofindia.co.in", "bankofindia.co.in",
+        "indianbank.in", "iob.in", "ucobank.com", "idbibank.in", "idfcfirstbank.com", "indusind.com",
+        "yesbank.in", "rblbank.com", "federalbank.co.in", "aubank.in",
+    ],
+    "Credit cards and payments": [
+        "sbicard.com", "americanexpress.com", "paytm.com", "phonepe.com", "npci.org.in", "bhimupi.org.in",
+    ],
+    "Regulators": ["rbi.org.in", "sebi.gov.in"],
+    "Shopping and telecom": ["amazon.in", "flipkart.com", "airtel.in", "jio.com"],
+}
+
+
+def official_websites_text() -> str:
+    endings = "; ".join(f"{end} ({who})" for end, who in OFFICIAL_ENDINGS.items())
+    sites = "; ".join(f"{group}: {', '.join(domains)}" for group, domains in OFFICIAL_WEBSITES.items())
+    return (
+        "Official websites. A link is official only if its address, before the first '/', ends with one "
+        f"of these exactly. Official endings: {endings}. Since 31 October 2025, RBI requires every bank in "
+        "India to use a .bank.in address, so a link like www.icici.bank.in/... or hdfc.bank.in/... is the "
+        "bank's real website even if it looks unfamiliar. "
+        f"Official addresses: {sites}. Anything else, "
+        "including lookalikes that contain these names (hdfcbank.com-verify.in, sbi-card.co, "
+        "icici.bank.in.secure-kyc.com), is not official. An official link does not make the rest of a "
+        "message genuine: a message can link to the real site and still ask for an OTP or give a fake "
+        "phone number.\n\n"
+    )
+
+
 # Prepended to every request. Submitted content is untrusted: scammers write
 # "this is official and verified" into their own messages.
 INPUT_PREAMBLE = (
@@ -30,7 +82,7 @@ INPUT_PREAMBLE = (
     "The content may be in English or any Indian language, often typed in English letters or mixed "
     "with English (for example 'Otp chepu' is Telugu for 'tell me the OTP', 'paise bhej do' is Hindi "
     "for 'send the money'). Understand it in that language.\n\n"
-)
+) + official_websites_text()
 
 USER_NOTE_HEADER = "Text pasted or written by the person asking for this check:\n"
 
@@ -59,7 +111,10 @@ IS_SCAM = {
         "true_description": "A deceptive attempt to get money, codes, card or account details, personal data, or device access.",
         "false_description": (
             "A genuine message, routine notification, honest marketing, or an ordinary conversation, "
-            "including an ordinary request between family or friends."
+            "including an ordinary request between family or friends. This includes a bank or app alert "
+            "confirming something done on the person's own account (a login, PIN or password change, "
+            "payment, or new device) that asks for nothing and only says how to contact or report to "
+            "the bank (its helpline, an official website listed above, or its app) if it wasn't them."
         ),
     },
 }
@@ -165,6 +220,17 @@ SIGNS: dict[str, dict] = {
                 "Does it ask the person to open a link or download a file from a shortened, misspelled, "
                 "or unofficial-looking address?"
             ),
+            "criteria": {
+                "true_description": (
+                    "The link is shortened (bit.ly and similar), misspelled, or a lookalike of the real site: "
+                    "extra words or hyphens (sbi-card-dispute.in), a different ending than the organisation uses, "
+                    "a free host, or a bare IP address. Or it asks to download an app or APK file."
+                ),
+                "false_description": (
+                    "No link, or every link is on one of the official websites listed above, or on the "
+                    "organisation's own well-known website with the correct spelling."
+                ),
+            },
         },
     },
     # --- How they push you ---
@@ -179,6 +245,13 @@ SIGNS: dict[str, dict] = {
                 "seats left, repeated pleading) or threaten arrest, a case, a blocked account, a cut "
                 "connection, or a penalty?"
             ),
+            "criteria": {
+                "true_description": "It pushes for immediate action or threatens a consequence.",
+                "false_description": (
+                    "No pressure or threat. Offering the person a way to block their own card, UPI, or "
+                    "account if something wasn't done by them is not a threat."
+                ),
+            },
         },
     },
     "keep_secret": {

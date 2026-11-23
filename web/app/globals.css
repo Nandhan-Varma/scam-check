@@ -1090,6 +1090,7 @@ progress.loading-spinner:indeterminate {
 
 .pill-group {
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 0.375rem;
 }
 

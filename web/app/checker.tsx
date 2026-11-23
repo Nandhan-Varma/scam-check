@@ -12,6 +12,7 @@ import {
   PersonIcon,
   PoliceIcon,
   SavedContactIcon,
+  SenderIcon,
   UploadIcon,
   XCircleIcon,
   type IconComponent,
@@ -160,20 +161,41 @@ type Context = {
   saved_contact: Answer;
   relayed: Answer;
   confirmed_by_call: Answer;
+  sms_from: "sender_name" | "phone_number" | "";
 };
 const NO_CONTEXT: Context = {
   saved_contact: "",
   relayed: "",
   confirmed_by_call: "",
+  sms_from: "",
 };
 
-const QUESTIONS: { key: keyof Context; text: string; icon: IconComponent }[] = [
-  { key: "saved_contact", text: "Is this number saved in your phone?", icon: SavedContactIcon },
-  { key: "relayed", text: "Did someone else pass this request on to you?", icon: ForwardedIcon },
+// [value sent to the server, label]. "" is "Not sure", the starting answer, and is never sent.
+type Option = readonly [string, string];
+const YES_NO: readonly Option[] = [
+  ["yes", "Yes"],
+  ["no", "No"],
+  ["", "Not sure"],
+];
+
+const QUESTIONS: { key: keyof Context; text: string; icon: IconComponent; options: readonly Option[] }[] = [
+  {
+    key: "sms_from",
+    text: "If it's an SMS, who sent it?",
+    icon: SenderIcon,
+    options: [
+      ["sender_name", "A name like AX-HDFCBK"],
+      ["phone_number", "A phone number"],
+      ["", "Not sure"],
+    ],
+  },
+  { key: "saved_contact", text: "Is this number saved in your phone?", icon: SavedContactIcon, options: YES_NO },
+  { key: "relayed", text: "Did someone else pass this request on to you?", icon: ForwardedIcon, options: YES_NO },
   {
     key: "confirmed_by_call",
     text: "Have you called them on a number you already had, to check?",
     icon: CalledIcon,
+    options: YES_NO,
   },
 ];
 
@@ -524,21 +546,15 @@ export default function Checker() {
               <legend>
                 Quick questions <span className="optional">(optional)</span>
               </legend>
-              <p className="hint">These help most when the message says it&apos;s from family or a friend.</p>
-              {QUESTIONS.map(({ key, text: question, icon: QuestionIcon }) => (
+              <p className="hint">These help most when the message says it&apos;s from your bank, family, or a friend.</p>
+              {QUESTIONS.map(({ key, text: question, icon: QuestionIcon, options }) => (
                 <div key={key} className="quick-question" role="radiogroup" aria-labelledby={`${id}-${key}`}>
                   <span id={`${id}-${key}`} className="quick-question-text">
                     <QuestionIcon className="quick-question-icon" />
                     {question}
                   </span>
                   <span className="pill-group">
-                    {(
-                      [
-                        ["yes", "Yes"],
-                        ["no", "No"],
-                        ["", "Not sure"],
-                      ] as const
-                    ).map(([value, label]) => (
+                    {options.map(([value, label]) => (
                       <label key={label} className="pill" data-default={value === "" || undefined}>
                         <input
                           type="radio"

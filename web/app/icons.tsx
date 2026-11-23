@@ -94,3 +94,4 @@ export const PersonIcon = icon(UserRound);
 export const SavedContactIcon = icon(Contact);
 export const ForwardedIcon = icon(Forward);
 export const CalledIcon = icon(PhoneCall);
+export const SenderIcon = icon(MessageSquareText);

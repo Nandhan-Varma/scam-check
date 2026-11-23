@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from .questions import CLAIMS_TO_BE_LABELS, GROUPS, SCAM_TYPES, SIGNS
 
 READABLE_MIN = 0.5  # below this there is nothing to judge
-SCAM_P = 0.75  # is_scam alone at or above this means "likely scam"
+SCAM_P = 0.75  # is_scam at or above this, with any warning sign present, means "likely scam"
 SCAM_WITH_SIGNS_P = 0.5  # ...or this, when two or more high-risk signs are present
 NOT_SURE_P = 0.30  # between this and SCAM_P the model is unsure
 SIGN_P = 0.60  # a warning sign counts as present at or above this
@@ -27,16 +27,23 @@ HIGH_RISK = frozenset(key for key, sign in SIGNS.items() if sign["high_risk"])
 RISKY_ASKS = frozenset({"ask_money", "ask_secret", "ask_card_info"})
 
 
+# Banks and government offices send SMS only from a registered sender name (DLT header) like
+# AX-HDFCBK or JD-SBICRD, never from a 10-digit mobile number.
+OFFICIAL_SENDERS = frozenset({"bank", "government"})
+SMS_FROM_VALUES = ("sender_name", "phone_number")
+
+
 @dataclass(frozen=True)
 class Context:
-    """The optional questions in the form. Each is "yes", "no", or None (not answered)."""
+    """The optional questions in the form. None means not answered."""
 
-    saved_contact: str | None = None  # Is this number saved in your phone?
-    relayed: str | None = None  # Did someone else pass this request on to you?
-    confirmed_by_call: str | None = None  # Have you called them on a number you already had to confirm?
+    saved_contact: str | None = None  # Is this number saved in your phone? yes / no
+    relayed: str | None = None  # Did someone else pass this request on to you? yes / no
+    confirmed_by_call: str | None = None  # Have you called them on a number you already had to confirm? yes / no
+    sms_from: str | None = None  # Who sent the SMS? sender_name (like AX-HDFCBK) / phone_number
 
     def as_dict(self) -> dict:
-        return {k: v for k, v in vars(self).items() if v in ("yes", "no")}
+        return {k: v for k, v in vars(self).items() if v is not None}
 
 
 @dataclass(frozen=True)
@@ -86,8 +93,10 @@ def decide(a: Answers) -> dict:
     if a.readable < READABLE_MIN and a.is_scam < NOT_SURE_P and not high_count:
         return {**base, "verdict": "unclear", "signs": [], "scam_type": None, "reasons": []}
 
-    # 1. What the model sees.
-    if a.is_scam >= SCAM_P or (a.is_scam >= SCAM_WITH_SIGNS_P and high_count >= 2):
+    # 1. What the model sees. "Likely a scam" needs at least one warning sign to show: a high
+    # is_scam with nothing to point at (e.g. a genuine "Not you? Call <bank helpline>" alert)
+    # is "not sure", whose advice is to check on a number you already have.
+    if (a.is_scam >= SCAM_P and present) or (a.is_scam >= SCAM_WITH_SIGNS_P and high_count >= 2):
         verdict = "likely_scam"
     elif a.is_scam >= NOT_SURE_P:
         verdict = "not_sure"
@@ -109,6 +118,23 @@ def decide(a: Answers) -> dict:
         elif ctx.saved_contact == "no" and a.claims_to_be == "family_or_friend":
             verdict = "likely_scam"
             reasons.append("They say they're someone you know, but the number isn't saved in your phone.")
+    official_claim = a.claims_to_be in OFFICIAL_SENDERS and a.claims_to_be_p >= CLAIM_MIN
+    if official_claim and ctx.sms_from == "phone_number":
+        who = "Banks" if a.claims_to_be == "bank" else "Government offices"
+        note = f"{who} send SMS from a sender name like AX-HDFCBK, never from a 10-digit phone number."
+        if verdict in ("not_sure", "suspicious"):
+            verdict = "likely_scam"
+            reasons.append(note)
+        elif verdict == "no_red_flags":
+            verdict = "suspicious"
+            reasons.append(note)
+    elif official_claim and ctx.sms_from == "sender_name" and verdict == "not_sure" and not present:
+        # Only a registered business can send from a sender name, and nothing else looked wrong.
+        verdict = "no_red_flags"
+        reasons.append(
+            "You said it came from their own sender name, like AX-HDFCBK, which only the real "
+            "organisation can use, and it asks you for nothing."
+        )
     if ctx.confirmed_by_call == "yes" and high_count <= 1 and a.is_scam < 0.9:
         # Calling a number you already had is the check we'd tell them to do, so don't ask again.
         confirmed_note = "You said you confirmed it by calling a number you already had, which is the best check there is."
