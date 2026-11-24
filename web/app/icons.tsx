@@ -1,6 +1,7 @@
 import {
   ArrowRight,
   AudioLines,
+  Bot,
   Briefcase,
   Check,
   CircleHelp,
@@ -18,6 +19,7 @@ import {
   IndianRupee,
   KeyRound,
   Landmark,
+  Languages,
   Link,
   Lock,
   MessageSquareText,
@@ -61,6 +63,7 @@ export const PhoneIcon = icon(Phone);
 export const ShareIcon = icon(Share2);
 export const UploadIcon = icon(Upload);
 export const PasteIcon = icon(ClipboardPaste);
+export const LanguageIcon = icon(Languages);
 
 // What you can check
 export const MessageIcon = icon(MessageSquareText);
@@ -79,6 +82,7 @@ export const SIGN_ICONS: Record<string, IconComponent> = {
   rush_or_threat: icon(Timer),
   keep_secret: icon(EyeOff),
   too_good: icon(Gift),
+  fools_checker: icon(Bot),
   cant_verify: icon(UserX),
 };
 export const SignFallbackIcon = FlagIcon;

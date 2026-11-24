@@ -11,7 +11,7 @@ Thresholds are starting values; tune them against labelled messages.
 The API clamps yes/no probabilities to 0.01-0.99.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .questions import CLAIMS_TO_BE_LABELS, GROUPS, SCAM_TYPES, SIGNS
 
@@ -22,6 +22,7 @@ NOT_SURE_P = 0.30  # between this and SCAM_P the model is unsure
 SIGN_P = 0.60  # a warning sign counts as present at or above this
 SCAM_TYPE_MIN = 0.40  # name the scam type only when the model is at least this sure
 CLAIM_MIN = 0.50  # show "claims to be" only when the model is at least this sure
+TAMPERED_SCORE = 0.95  # risk score shown, at least, when the content tries to fool the checker
 
 HIGH_RISK = frozenset(key for key, sign in SIGNS.items() if sign["high_risk"])
 RISKY_ASKS = frozenset({"ask_money", "ask_secret", "ask_card_info"})
@@ -56,6 +57,8 @@ class Answers:
     scam_type: str
     scam_type_p: float
     context: Context = field(default_factory=Context)
+    # The pasted text contains instructions or a fake result aimed at a scam checker (injection.py).
+    tampered: bool = False
 
 
 def _sign(key: str, p: float) -> dict:
@@ -70,7 +73,34 @@ def _sign(key: str, p: float) -> dict:
     }
 
 
+TAMPERED_NOTE = (
+    "This message tries to trick scam checkers into calling it safe. Real messages never do this."
+)
+CONFIRMED_NOTE = "You said you confirmed it by calling a number you already had, which is the best check there is."
+# Shown when a quick answer pointed to "safe" but the message itself outweighed it, so the
+# person doesn't think their answer was ignored.
+CONFIRMED_OVERRULED = (
+    "You said you confirmed it by calling a number you already had, but the message itself shows warning "
+    "signs. If the number you called came from this message, that call doesn't count."
+)
+SENDER_NAME_OVERRULED = (
+    "You said it came from their own sender name, like AX-HDFCBK, but the message itself shows warning "
+    "signs. Scam texts can appear in the same thread as real bank messages."
+)
+SAVED_OVERRULED = (
+    "You said this number is saved in your phone, but saved numbers can be hacked or used by someone else. "
+    "Call them on that number before doing what it asks."
+)
+
+
 def decide(a: Answers) -> dict:
+    signs = dict(a.signs)
+    if a.tampered:
+        signs["fools_checker"] = max(signs.get("fools_checker", 0.0), 0.99)
+    # Text written to steer a checker is a scam on its own, whatever the steered answers say.
+    tampered = signs.get("fools_checker", 0.0) >= SIGN_P
+    is_scam = max(a.is_scam, TAMPERED_SCORE) if tampered else a.is_scam
+    a = replace(a, signs=signs, is_scam=is_scam)
     checks = [_sign(key, p) for key, p in sorted(a.signs.items(), key=lambda kv: kv[1], reverse=True)]
     claims = (
         {"key": a.claims_to_be, "label": CLAIMS_TO_BE_LABELS[a.claims_to_be]}
@@ -137,13 +167,24 @@ def decide(a: Answers) -> dict:
         )
     if ctx.confirmed_by_call == "yes" and high_count <= 1 and a.is_scam < 0.9:
         # Calling a number you already had is the check we'd tell them to do, so don't ask again.
-        confirmed_note = "You said you confirmed it by calling a number you already had, which is the best check there is."
         if verdict == "likely_scam":
             verdict = "suspicious"
-            reasons.append(confirmed_note)
+            reasons.append(CONFIRMED_NOTE)
         elif verdict == "not_sure":
             verdict = "no_red_flags"
-            reasons.append(confirmed_note)
+            reasons.append(CONFIRMED_NOTE)
+
+    # 3. Quick answers that pointed to "safe" but didn't outweigh the message. Say so.
+    if verdict in ("likely_scam", "suspicious"):
+        if ctx.confirmed_by_call == "yes" and CONFIRMED_NOTE not in reasons:
+            reasons.append(CONFIRMED_OVERRULED)
+        if ctx.sms_from == "sender_name":
+            reasons.append(SENDER_NAME_OVERRULED)
+        if ctx.saved_contact == "yes":
+            reasons.append(SAVED_OVERRULED)
+
+    if tampered:  # is_scam is already at TAMPERED_SCORE, so the rules above said "likely scam"
+        reasons.append(TAMPERED_NOTE)
 
     scam_type = None
     if verdict in ("likely_scam", "suspicious") and a.is_scam >= NOT_SURE_P and a.scam_type != "other" and a.scam_type_p >= SCAM_TYPE_MIN:

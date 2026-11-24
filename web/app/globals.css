@@ -40,7 +40,7 @@
 html {
   background: var(--cream);
   color: var(--ink);
-  font-family: var(--font-sans), system-ui, sans-serif;
+  font-family: var(--font-sans), var(--font-deva), var(--font-telugu), system-ui, sans-serif;
   line-height: 1.55;
   -webkit-text-size-adjust: 100%;
   scroll-padding-top: calc(var(--header-height) + 1rem);
@@ -226,7 +226,7 @@ a {
   align-items: center;
   gap: 0.5rem;
   margin: 0;
-  font-family: var(--font-serif), Georgia, serif;
+  font-family: var(--font-serif), var(--font-deva-serif), var(--font-telugu-serif), Georgia, serif;
   font-size: 1.5rem;
   line-height: 1;
   text-decoration: none;
@@ -263,14 +263,66 @@ a {
   background: var(--cream-deep);
 }
 
-/* On narrow screens the page is one short scroll; keep only the brand and CTA. */
-@media (max-width: 48rem) {
+/* Language menu: a native select, so phones show their own picker. */
+.lang-picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.lang-icon {
+  position: absolute;
+  inset-inline-start: 0.8rem;
+  width: 1.125rem;
+  height: 1.125rem;
+  pointer-events: none;
+}
+
+.lang-picker select {
+  appearance: none;
+  min-height: 2.5rem;
+  padding: 0 2.25rem 0 2.4rem;
+  font: inherit;
+  font-size: 0.9375rem;
+  color: var(--ink);
+  background: transparent
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231b1a17' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+    no-repeat right 0.8rem center / 0.875rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.lang-picker select:hover {
+  background-color: var(--cream-deep);
+}
+
+/* On narrow screens the page is one short scroll; keep only the brand, language, and CTA. */
+@media (max-width: 52rem) {
   .site-nav {
     display: none;
   }
 
-  .site-header > .button {
+  .lang-picker {
     margin-inline-start: auto;
+  }
+}
+
+/* Hindi and Telugu nav labels are longer, so the nav folds away sooner. */
+@media (max-width: 64rem) {
+  html:is(:lang(hi), :lang(te)) .site-nav {
+    display: none;
+  }
+
+  html:is(:lang(hi), :lang(te)) .lang-picker {
+    margin-inline-start: auto;
+  }
+}
+
+/* The hero has the same button right below, so tiny screens drop the header copy. */
+@media (max-width: 34rem) {
+  .header-cta {
+    display: none;
   }
 }
 
@@ -294,7 +346,7 @@ a {
 
 .section-head h2 {
   margin: 0;
-  font-family: var(--font-serif), Georgia, serif;
+  font-family: var(--font-serif), var(--font-deva-serif), var(--font-telugu-serif), Georgia, serif;
   font-weight: 400;
   font-size: clamp(2.25rem, 4.5vw, 3.25rem);
   line-height: 1.05;
@@ -356,7 +408,7 @@ a {
 
 h1 {
   margin: 0;
-  font-family: var(--font-serif), Georgia, serif;
+  font-family: var(--font-serif), var(--font-deva-serif), var(--font-telugu-serif), Georgia, serif;
   font-weight: 400;
   font-size: clamp(2.75rem, 6.2vw, 4.75rem);
   line-height: 1;
@@ -483,7 +535,7 @@ h1 em {
   align-items: center;
   gap: 0.625rem;
   margin: 0 0 0.75rem;
-  font-family: var(--font-serif), Georgia, serif;
+  font-family: var(--font-serif), var(--font-deva-serif), var(--font-telugu-serif), Georgia, serif;
   font-size: 1.5rem;
   line-height: 1;
 }
@@ -493,7 +545,7 @@ h1 em {
   place-items: center;
   width: 1.75rem;
   height: 1.75rem;
-  font-family: var(--font-sans), sans-serif;
+  font-family: var(--font-sans), var(--font-deva), var(--font-telugu), sans-serif;
   font-size: 0.75rem;
   font-weight: 700;
   color: var(--cream);
@@ -1841,7 +1893,7 @@ progress.loading-spinner:indeterminate {
 .step-number {
   display: block;
   margin-bottom: 2.5rem;
-  font-family: var(--font-serif), Georgia, serif;
+  font-family: var(--font-serif), var(--font-deva-serif), var(--font-telugu-serif), Georgia, serif;
   font-size: 3rem;
   line-height: 1;
   color: var(--muted-on-dark);
@@ -2043,7 +2095,7 @@ progress.loading-spinner:indeterminate {
 
 .helpline h2 {
   margin: 0;
-  font-family: var(--font-serif), Georgia, serif;
+  font-family: var(--font-serif), var(--font-deva-serif), var(--font-telugu-serif), Georgia, serif;
   font-weight: 400;
   font-size: clamp(2rem, 4vw, 2.75rem);
   line-height: 1.1;
@@ -2092,4 +2144,22 @@ progress.loading-spinner:indeterminate {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+/* Hindi and Telugu: vowel signs stack above and below the letters, so the tight Latin
+   line-heights would make lines touch, and negative tracking or caps add nothing. */
+html:is(:lang(hi), :lang(te)) :is(h1, h2, h3, .step-number, .demo-verdict-title, .result-title h2, .kicker, .eyebrow) {
+  letter-spacing: normal;
+}
+
+html:is(:lang(hi), :lang(te)) :is(h1, h2, .demo-verdict-title, .result-title h2) {
+  line-height: 1.35;
+}
+
+html:is(:lang(hi), :lang(te)) h1 {
+  font-size: clamp(2.25rem, 5vw, 3.75rem);
+}
+
+html:is(:lang(hi), :lang(te)) body {
+  line-height: 1.65;
 }

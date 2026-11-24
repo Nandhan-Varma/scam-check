@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, useSyncExternalStore, type DragEvent, type FormEvent } from "react";
+import { serverMessage, useT, type Messages, type RecordingLength } from "./i18n";
 import {
   BankIcon,
   CalledIcon,
@@ -17,7 +18,7 @@ import {
   XCircleIcon,
   type IconComponent,
 } from "./icons";
-import { Result, type CheckResult } from "./result";
+import { Result, describeInput, type CheckResult, type InputKind } from "./result";
 
 // Vercel and Netlify reject request bodies over ~4.5 MB. Match the backend's MAX_UPLOAD_MB.
 const MAX_FILE_MB = Number(process.env.NEXT_PUBLIC_MAX_UPLOAD_MB) || 4;
@@ -26,10 +27,11 @@ const ACCEPT = "image/*,audio/*,video/*,application/pdf,.opus,.m4a,.mov";
 // Recordings: up to 5 minutes is quick; up to 10 is allowed with a warning; longer is refused.
 const COMFORTABLE_SECONDS = 5 * 60;
 const MAX_MEDIA_SECONDS = 10 * 60;
-const TRIM_TIP = "trim it to the part where they ask for money, an OTP, or an app";
 
-type FileKind = "image" | "audio" | "video" | "pdf";
-type InputKind = FileKind | "text";
+type FileKind = Exclude<InputKind, "text">;
+
+// Text shown to the person is kept as a function of the strings, so it follows a language switch.
+type Localized = (t: Messages) => string;
 
 function fileKind(file: File): FileKind {
   const type = file.type;
@@ -49,9 +51,9 @@ function formatDuration(seconds: number) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-// "3-minute", or "short" for under a minute and a half.
-function lengthWord(seconds: number) {
-  return seconds < 90 ? "short" : `${Math.round(seconds / 60)}-minute`;
+// "short" for under a minute and a half, otherwise the length in whole minutes.
+function recordingLength(seconds: number | null): RecordingLength {
+  return seconds === null ? null : { short: seconds < 90, minutes: Math.round(seconds / 60) };
 }
 
 // The recording's length, read in the browser without uploading it. Null when the
@@ -76,15 +78,14 @@ function readDuration(file: File): Promise<number | null> {
   });
 }
 
-function tooBigMessage(file: File, size: string) {
-  const limit = `The limit is ${MAX_FILE_MB} MB`;
+function tooBigMessage(file: File, size: string): Localized {
   switch (fileKind(file)) {
     case "audio":
-      return `That recording is ${size}. ${limit}. Try a shorter clip (${TRIM_TIP}), or type what the caller said.`;
+      return (t) => t.errors.tooBigAudio(size, MAX_FILE_MB);
     case "video":
-      return `That video is ${size}. ${limit}, so most videos are too big. Upload a screenshot instead, or type what was said.`;
+      return (t) => t.errors.tooBigVideo(size, MAX_FILE_MB);
     default:
-      return `That file is ${size}. ${limit}. Try a screenshot of just the part that worries you.`;
+      return (t) => t.errors.tooBigFile(size, MAX_FILE_MB);
   }
 }
 
@@ -92,29 +93,27 @@ type Progress = { kind: InputKind; seconds: number | null };
 
 // What the person sees while a check runs. The API answers everything in one
 // request, so these follow typical timing rather than live progress.
-const STAGES: { at: number; text: (p: Progress) => string }[] = [
-  { at: 0, text: ({ kind }) => (kind === "text" ? "Sending your message…" : "Uploading your file…") },
+const STAGES: { at: number; text: (p: Progress, t: Messages) => string }[] = [
+  { at: 0, text: ({ kind }, t) => (kind === "text" ? t.stages.sending : t.stages.uploading) },
   {
     at: 1500,
-    text: ({ kind, seconds }) =>
+    text: ({ kind, seconds }, t) =>
       kind === "audio"
-        ? `Listening to the ${seconds ? `${lengthWord(seconds)} ` : ""}recording…`
+        ? t.stages.listening(recordingLength(seconds))
         : kind === "video"
-          ? "Watching the video…"
-          : "Reading what it says…",
+          ? t.stages.watching
+          : t.stages.reading,
   },
-  { at: 4000, text: () => "Checking for warning signs…" },
-  { at: 9000, text: () => "Working out the verdict…" },
+  { at: 4000, text: (_, t) => t.stages.signs },
+  { at: 9000, text: (_, t) => t.stages.verdict },
   {
     at: 18000,
-    text: ({ kind, seconds }) =>
+    text: ({ kind, seconds }, t) =>
       kind !== "audio" && kind !== "video"
-        ? "Still working, nearly there…"
-        : seconds
-          ? `Still working. A ${lengthWord(seconds)} recording takes about ${checkSeconds(seconds)} seconds.`
-          : "Still working. Recordings can take up to a minute.",
+        ? t.stages.nearly
+        : t.stages.recordingSlow(recordingLength(seconds), seconds ? checkSeconds(seconds) : 0),
   },
-  { at: 40000, text: () => "Almost done. Thanks for waiting." },
+  { at: 40000, text: (_, t) => t.stages.almost },
 ];
 
 // Clipboard reading needs a secure context (https or localhost) and a supporting browser.
@@ -122,35 +121,30 @@ const noSubscribe = () => () => {};
 const clipboardReadable = () => typeof navigator !== "undefined" && typeof navigator.clipboard?.readText === "function";
 
 // One-click samples for demos. The last two are genuine or borderline, so
-// people can see the checker doesn't flag everything.
-const EXAMPLES: { label: string; icon: IconComponent; text: string }[] = [
+// people can see the checker doesn't flag everything. The messages stay as they
+// were received, in English; their chip labels come from t.checker.examples, in this order.
+const EXAMPLES: { icon: IconComponent; text: string }[] = [
   {
-    label: "Bank KYC SMS",
     icon: BankIcon,
     text: "Dear Customer, your SBI YONO account will be blocked today due to pending PAN/KYC update. Update immediately at http://sbi-kyc-verify.in or share the OTP sent to your mobile with our executive. -SBI",
   },
   {
-    label: "Digital arrest call",
     icon: PoliceIcon,
     text: "Caller: This is Inspector Rajesh Sharma from Mumbai Cyber Crime. A FedEx parcel in your name with 5 fake passports and drugs was seized. You are now under digital arrest. Stay on this video call and do not tell anyone, including your family. To clear your name, transfer ₹1,50,000 to the RBI verification account we send you.",
   },
   {
-    label: "Friend needs your card",
     icon: CardIcon,
     text: "Bro, my card got blocked and the flight fare goes up in 20 mins. Send me your card number, expiry and CVV, I'll book it and pay you back tonight. Can't talk right now, I'm at the airport counter. This is my new number.",
   },
   {
-    label: "Part-time job offer",
     icon: JobIcon,
     text: "Hi! I'm Priya from Amazon HR. We have a part-time job: earn ₹3,000–8,000 daily just by liking YouTube videos. Pay a small ₹500 registration fee on Telegram to unlock VIP tasks.",
   },
   {
-    label: "Dad asks for money",
     icon: PersonIcon,
     text: 'My dad messaged me on WhatsApp from his usual number, the one saved as Nanna: "Hi. Can you transfer 10k?"',
   },
   {
-    label: "Real bank OTP",
     icon: MessageIcon,
     text: "482913 is your OTP for a transaction of INR 2,499.00 at AMAZON on HDFC Bank card XX1234. Valid for 10 mins. Do not share this OTP with anyone. -HDFC Bank",
   },
@@ -171,32 +165,26 @@ const NO_CONTEXT: Context = {
 };
 
 // [value sent to the server, label]. "" is "Not sure", the starting answer, and is never sent.
-type Option = readonly [string, string];
+type Option = readonly [string, Localized];
 const YES_NO: readonly Option[] = [
-  ["yes", "Yes"],
-  ["no", "No"],
-  ["", "Not sure"],
+  ["yes", (t) => t.checker.yes],
+  ["no", (t) => t.checker.no],
+  ["", (t) => t.checker.notSure],
 ];
 
-const QUESTIONS: { key: keyof Context; text: string; icon: IconComponent; options: readonly Option[] }[] = [
+const QUESTIONS: { key: keyof Context; icon: IconComponent; options: readonly Option[] }[] = [
   {
     key: "sms_from",
-    text: "If it's an SMS, who sent it?",
     icon: SenderIcon,
     options: [
-      ["sender_name", "A name like AX-HDFCBK"],
-      ["phone_number", "A phone number"],
-      ["", "Not sure"],
+      ["sender_name", (t) => t.checker.smsSenderName],
+      ["phone_number", (t) => t.checker.smsPhoneNumber],
+      ["", (t) => t.checker.notSure],
     ],
   },
-  { key: "saved_contact", text: "Is this number saved in your phone?", icon: SavedContactIcon, options: YES_NO },
-  { key: "relayed", text: "Did someone else pass this request on to you?", icon: ForwardedIcon, options: YES_NO },
-  {
-    key: "confirmed_by_call",
-    text: "Have you called them on a number you already had, to check?",
-    icon: CalledIcon,
-    options: YES_NO,
-  },
+  { key: "saved_contact", icon: SavedContactIcon, options: YES_NO },
+  { key: "relayed", icon: ForwardedIcon, options: YES_NO },
+  { key: "confirmed_by_call", icon: CalledIcon, options: YES_NO },
 ];
 
 function formatSize(bytes: number) {
@@ -205,46 +193,38 @@ function formatSize(bytes: number) {
     : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
-const KIND_LABEL: Record<FileKind, string> = {
-  image: "Screenshot",
-  audio: "Call recording",
-  video: "Video",
-  pdf: "PDF",
-};
-
-function describeInput(text: string, file: File | null) {
-  const parts: string[] = [];
-  if (text.trim()) parts.push("Text");
-  if (file) parts.push(KIND_LABEL[fileKind(file)]);
-  return parts.join(" + ");
+function inputKinds(text: string, file: File | null): InputKind[] {
+  const kinds: InputKind[] = [];
+  if (text.trim()) kinds.push("text");
+  if (file) kinds.push(fileKind(file));
+  return kinds;
 }
 
 // Under a chosen recording: how long the check will take, or a warning when it's long.
-function MediaNote({ kind, seconds }: { kind: FileKind; seconds: number | null }) {
+function MediaNote({ kind, seconds, t }: { kind: FileKind; seconds: number | null; t: Messages }) {
   if (kind !== "audio" && kind !== "video") return null;
-  if (seconds === null) return <p className="hint media-note">Recordings take up to a minute to check.</p>;
-  if (seconds <= COMFORTABLE_SECONDS)
-    return <p className="hint media-note">Takes about {checkSeconds(seconds)} seconds to check.</p>;
+  if (seconds === null) return <p className="hint media-note">{t.checker.mediaUnknown}</p>;
+  if (seconds <= COMFORTABLE_SECONDS) return <p className="hint media-note">{t.checker.mediaTakes(checkSeconds(seconds))}</p>;
   return (
     <p className="media-note" data-long>
-      This is a long recording, so the check may take {checkSeconds(seconds) >= 90 ? "a couple of minutes" : "over a minute"}. For a
-      faster answer, {TRIM_TIP}.
+      {t.checker.mediaLong(checkSeconds(seconds) >= 90)}
     </p>
   );
 }
 
 export default function Checker() {
   const id = useId();
+  const t = useT();
   const fileInput = useRef<HTMLInputElement>(null);
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [context, setContext] = useState<Context>(NO_CONTEXT);
   const [dragging, setDragging] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Localized | null>(null);
   const [result, setResult] = useState<{
     data: CheckResult;
-    source: string;
+    source: InputKind[];
   } | null>(null);
   // After a check the form folds into a one-line summary; "Edit" opens it again.
   const [editing, setEditing] = useState(false);
@@ -253,7 +233,7 @@ export default function Checker() {
   const textRef = useRef<HTMLTextAreaElement>(null);
   const focusText = useRef(false);
   const canPaste = useSyncExternalStore(noSubscribe, clipboardReadable, () => false);
-  const [pasteNote, setPasteNote] = useState<string | null>(null);
+  const [pasteNote, setPasteNote] = useState<Localized | null>(null);
   const [stage, setStage] = useState(0);
   const stageTimers = useRef<number[]>([]);
   // Length of the chosen recording in seconds; null for other files or when unknown.
@@ -272,17 +252,18 @@ export default function Checker() {
     try {
       const clip = (await navigator.clipboard.readText()).trim();
       if (!clip) {
-        setPasteNote("Nothing to paste. Copy the message first, then tap Paste.");
+        setPasteNote(() => (t: Messages) => t.checker.pasteEmpty);
         return;
       }
       setText(clip.slice(0, MAX_TEXT_CHARS));
       setError(null);
       if (clip.length > MAX_TEXT_CHARS) {
-        setPasteNote(`Only the first ${MAX_TEXT_CHARS.toLocaleString("en-IN")} characters were pasted.`);
+        const chars = MAX_TEXT_CHARS.toLocaleString("en-IN");
+        setPasteNote(() => (t: Messages) => t.checker.pasteTruncated(chars));
       }
     } catch {
       // Permission refused, or the browser only allows pasting from its own menu.
-      setPasteNote("Couldn't open your clipboard. Long-press the message box and choose Paste.");
+      setPasteNote(() => (t: Messages) => t.checker.pasteFailed);
     }
     textRef.current?.focus();
   }
@@ -315,13 +296,18 @@ export default function Checker() {
     setEditing(false);
   }
 
+  // State setters treat a function argument as an updater, so a Localized is wrapped once more.
+  function showError(message: Localized) {
+    setError(() => message);
+  }
+
   async function pickFile(next: File | null) {
     const token = ++pickToken.current;
     setError(null);
     if (!next) return clearFile();
     if (next.size > MAX_FILE_MB * 1024 * 1024) {
       clearFile();
-      setError(tooBigMessage(next, formatSize(next.size)));
+      showError(tooBigMessage(next, formatSize(next.size)));
       return;
     }
     const kind = fileKind(next);
@@ -329,10 +315,8 @@ export default function Checker() {
     if (token !== pickToken.current) return; // another file was picked while this one was read
     if (seconds !== null && seconds > MAX_MEDIA_SECONDS) {
       clearFile();
-      setError(
-        `That ${kind === "video" ? "video" : "recording"} is ${formatDuration(seconds)} long. ` +
-          `The limit is ${MAX_MEDIA_SECONDS / 60} minutes: ${TRIM_TIP}, or type what was said.`,
-      );
+      const duration = formatDuration(seconds);
+      showError((t) => t.errors.tooLong(kind === "video", duration, MAX_MEDIA_SECONDS / 60));
       return;
     }
     setMediaSeconds(seconds);
@@ -353,7 +337,7 @@ export default function Checker() {
 
   async function runCheck(ctx: Context) {
     if (!text.trim() && !file) {
-      setError("Paste a message, describe what happened, or add a screenshot.");
+      showError((t) => t.errors.empty);
       return;
     }
     setError(null);
@@ -364,7 +348,7 @@ export default function Checker() {
     setProgress({ kind: file ? fileKind(file) : "text", seconds: mediaSeconds });
     stageTimers.current.forEach(clearTimeout);
     stageTimers.current = STAGES.slice(1).map((s, i) => window.setTimeout(() => setStage(i + 1), s.at));
-    const source = describeInput(text, file);
+    const source = inputKinds(text, file);
     const body = new FormData();
     body.set("text", text);
     if (file) body.set("file", file);
@@ -375,24 +359,25 @@ export default function Checker() {
       if (!res.ok) {
         // No `detail` means the backend never answered (crashed, restarting, or too slow for the proxy).
         const slow = file && (fileKind(file) === "audio" || fileKind(file) === "video");
-        setError(
-          typeof data?.detail === "string"
-            ? data.detail
+        const detail: unknown = data?.detail;
+        showError(
+          typeof detail === "string"
+            ? (t) => serverMessage(detail, t)
             : slow
-              ? "This took too long to check. Try a shorter clip (under 5 minutes works best), or try again."
-              : `Something went wrong (${res.status}). Try again.`,
+              ? (t) => t.errors.slow
+              : (t) => t.errors.generic(res.status),
         );
         return;
       }
       // An older backend answers in a different shape (no `checks`); say so instead of crashing.
       if (!Array.isArray(data?.checks) || !Array.isArray(data?.reasons)) {
-        setError("The ScamCheck server is running an older version. Restart the backend, then check again.");
+        showError((t) => t.errors.oldBackend);
         return;
       }
       setResult({ data: data as CheckResult, source });
       setEditing(false);
     } catch {
-      setError("Couldn't reach ScamCheck. Check your connection and try again.");
+      showError((t) => t.errors.offline);
     } finally {
       stageTimers.current.forEach(clearTimeout);
       setLoading(false);
@@ -426,29 +411,31 @@ export default function Checker() {
         {collapsed ? (
           <div className="checked-summary">
             <div className="checked-summary-text">
-              <p className="checked-label">You checked · {result.source}</p>
+              <p className="checked-label">
+                {t.checker.youChecked} · {describeInput(result.source, t)}
+              </p>
               <p className="checked-snippet">{text.trim() || file?.name}</p>
             </div>
             <div className="checked-actions">
               <button type="button" className="button button-small button-ghost" onClick={editCheck}>
-                Edit
+                {t.checker.edit}
               </button>
               <button type="button" className="button button-small" onClick={checkAnother}>
-                Check another
+                {t.checker.checkAnother}
               </button>
             </div>
           </div>
         ) : (
-          <form className="checker" onSubmit={onSubmit} aria-label="Scam check" noValidate>
+          <form className="checker" onSubmit={onSubmit} aria-label={t.checker.formLabel} noValidate>
             <div className="examples" role="group" aria-labelledby={`${id}-examples`}>
               <span id={`${id}-examples`} className="examples-label">
-                Try an example
+                {t.checker.examplesLabel}
               </span>
               <div className="example-chips">
-                {EXAMPLES.map(({ label, icon: ExampleIcon, text: sample }) => (
-                  <button key={label} type="button" className="chip-button" onClick={() => loadExample(sample)}>
+                {EXAMPLES.map(({ icon: ExampleIcon, text: sample }, i) => (
+                  <button key={i} type="button" className="chip-button" onClick={() => loadExample(sample)}>
                     <ExampleIcon className="chip-icon" />
-                    {label}
+                    {t.checker.examples[i]}
                   </button>
                 ))}
               </div>
@@ -456,10 +443,10 @@ export default function Checker() {
 
             <div className="field">
               <div className="field-head">
-                <label htmlFor={`${id}-text`}>Message</label>
+                <label htmlFor={`${id}-text`}>{t.checker.messageLabel}</label>
                 {canPaste && (
                   <button type="button" className="paste-button" onClick={pasteFromClipboard}>
-                    <PasteIcon className="button-icon" /> Paste
+                    <PasteIcon className="button-icon" /> {t.checker.paste}
                   </button>
                 )}
               </div>
@@ -472,21 +459,21 @@ export default function Checker() {
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 aria-describedby={`${id}-text-hint`}
-                placeholder="Paste the SMS or WhatsApp message here, or describe the call in your own words"
+                placeholder={t.checker.placeholder}
               />
               {pasteNote && (
                 <p className="paste-note" role="status">
-                  {pasteNote}
+                  {pasteNote(t)}
                 </p>
               )}
               <p id={`${id}-text-hint`} className="hint">
-                Any language is fine. Remove OTPs, card numbers, and account numbers first.
+                {t.checker.textHint}
               </p>
             </div>
 
             <div className="field">
               <span className="label" id={`${id}-file-label`}>
-                Screenshot or recording <span className="optional">(optional)</span>
+                {t.checker.fileLabel} <span className="optional">{t.checker.optional}</span>
               </span>
               {file ? (
                 <>
@@ -498,10 +485,11 @@ export default function Checker() {
                       {formatSize(file.size)}
                     </span>
                     <button type="button" className="link-button" onClick={clearFile}>
-                      Remove<span className="visually-hidden"> {file.name}</span>
+                      {t.checker.remove}
+                      <span className="visually-hidden"> {file.name}</span>
                     </button>
                   </div>
-                  <MediaNote kind={fileKind(file)} seconds={mediaSeconds} />
+                  <MediaNote kind={fileKind(file)} seconds={mediaSeconds} t={t} />
                 </>
               ) : (
                 <label
@@ -516,20 +504,15 @@ export default function Checker() {
                   onDrop={onDrop}
                 >
                   <UploadIcon className="dropzone-icon" />
-                  <span className="dropzone-title">Add a screenshot, voice note, video, or PDF</span>
+                  <span className="dropzone-title">{t.checker.dropTitle}</span>
                   <span className="hint">
-                    Tap to choose<span className="drop-only">, or drop it here</span> · up to {MAX_FILE_MB}
-                    {" "}MB
+                    {t.checker.dropTap}
+                    <span className="drop-only">{t.checker.dropOnly}</span> · {t.checker.dropLimit(MAX_FILE_MB)}
                   </span>
-                  <span className="hint">Call recordings work best under 5 minutes.</span>
+                  <span className="hint">{t.checker.dropTip}</span>
                 </label>
               )}
-              {!file && (
-                <p className="hint">
-                  No recording? Type what the caller said in the message box: who they said they were, and what they
-                  asked you to do.
-                </p>
-              )}
+              {!file && <p className="hint">{t.checker.noRecording}</p>}
               <input
                 ref={fileInput}
                 id={`${id}-file`}
@@ -544,18 +527,18 @@ export default function Checker() {
 
             <fieldset className="quick-questions">
               <legend>
-                Quick questions <span className="optional">(optional)</span>
+                {t.checker.quickTitle} <span className="optional">{t.checker.optional}</span>
               </legend>
-              <p className="hint">These help most when the message says it&apos;s from your bank, family, or a friend.</p>
-              {QUESTIONS.map(({ key, text: question, icon: QuestionIcon, options }) => (
+              <p className="hint">{t.checker.quickHint}</p>
+              {QUESTIONS.map(({ key, icon: QuestionIcon, options }) => (
                 <div key={key} className="quick-question" role="radiogroup" aria-labelledby={`${id}-${key}`}>
                   <span id={`${id}-${key}`} className="quick-question-text">
                     <QuestionIcon className="quick-question-icon" />
-                    {question}
+                    {t.checker.questions[key]}
                   </span>
                   <span className="pill-group">
                     {options.map(([value, label]) => (
-                      <label key={label} className="pill" data-default={value === "" || undefined}>
+                      <label key={value || "unsure"} className="pill" data-default={value === "" || undefined}>
                         <input
                           type="radio"
                           name={key}
@@ -563,7 +546,7 @@ export default function Checker() {
                           checked={context[key] === value}
                           onChange={() => setContext((c) => ({ ...c, [key]: value }))}
                         />
-                        <span>{label}</span>
+                        <span>{label(t)}</span>
                       </label>
                     ))}
                   </span>
@@ -574,7 +557,7 @@ export default function Checker() {
             {error && (
               <p className="error" role="alert">
                 <XCircleIcon className="error-icon" />
-                <span>{error}</span>
+                <span>{error(t)}</span>
               </p>
             )}
 
@@ -582,11 +565,11 @@ export default function Checker() {
               <button type="submit" className="button" disabled={loading}>
                 {loading ? (
                   <>
-                    <progress className="loading-spinner" aria-label="Checking" />
-                    Checking…
+                    <progress className="loading-spinner" aria-label={t.checker.checkingLabel} />
+                    {t.checker.checking}
                   </>
                 ) : (
-                  "Check for scam"
+                  t.checker.submit
                 )}
               </button>
               {loading ? (
@@ -596,10 +579,10 @@ export default function Checker() {
                       <span key={s.at} data-done={i <= stage || undefined} />
                     ))}
                   </div>
-                  <p className="progress-text">{STAGES[stage].text(progress)}</p>
+                  <p className="progress-text">{STAGES[stage].text(progress, t)}</p>
                 </div>
               ) : (
-                <p className="hint">Free. Checked by Google&apos;s Gemini AI. ScamCheck doesn&apos;t save what you send.</p>
+                <p className="hint">{t.checker.freeNote}</p>
               )}
             </div>
           </form>
