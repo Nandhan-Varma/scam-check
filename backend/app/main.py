@@ -12,8 +12,9 @@ from google import genai
 # The Decisions API client raises these (not google.genai.errors.APIError).
 from google.genai._interactions import APIConnectionError, APIStatusError
 
+from .injection import tries_to_fool_checker
 from .media import actual_mime
-from .questions import CONTEXT_HEADER, INPUT_PREAMBLE, SIGNS, USER_NOTE_HEADER, build_questions
+from .questions import CONTEXT_HEADER, INPUT_PREAMBLE, SIGNS, USER_NOTE_HEADER, from_wire, wire_questions
 from .ratelimit import Limits, RateLimiter, client_ip, trusted_proxies_from_env
 from .verdict import SMS_FROM_VALUES, Answers, Context, decide
 
@@ -127,7 +128,8 @@ def build_input(text: str, context: Context, mime: str | None = None, data: byte
     return blocks
 
 
-def to_answers(ans, context: Context) -> Answers:
+def to_answers(wire_answers, context: Context, text: str = "") -> Answers:
+    ans = from_wire(wire_answers)
     return Answers(
         readable=ans["readable"].noul,
         is_scam=ans["is_scam"].noul,
@@ -137,6 +139,7 @@ def to_answers(ans, context: Context) -> Answers:
         scam_type=ans["scam_type"].choice,
         scam_type_p=ans["scam_type"].confidence,
         context=context,
+        tampered=tries_to_fool_checker(text),
     )
 
 
@@ -190,7 +193,7 @@ async def check(
     client = get_client()
     started = time.perf_counter()
     try:
-        result = await client.aio.decisions.create(model=MODEL, input=blocks, questions=build_questions())
+        result = await client.aio.decisions.create(model=MODEL, input=blocks, questions=wire_questions())
     except APIStatusError as e:
         error_body = e.body.get("error", {}) if isinstance(e.body, dict) else {}
         if e.status_code == 400 and error_body.get("code") in SAFETY_CODES:
@@ -210,7 +213,7 @@ async def check(
 
     if not result.answers:  # input filters can block without an HTTP error; prompt_feedback says why
         raise HTTPException(422, "Gemini's safety filters blocked this content, so it could not be checked.")
-    answers = to_answers(result.answers, context)
+    answers = to_answers(result.answers, context, text)
     decision = decide(answers)
     input_tokens = result.usage.total_input_tokens if result.usage else None
     # Scores and sizes only, never the message: enough to see why a check came out "unclear".
