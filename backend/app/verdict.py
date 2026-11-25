@@ -26,6 +26,8 @@ TAMPERED_SCORE = 0.95  # risk score shown, at least, when the content tries to f
 
 HIGH_RISK = frozenset(key for key, sign in SIGNS.items() if sign["high_risk"])
 RISKY_ASKS = frozenset({"ask_money", "ask_secret", "ask_card_info"})
+# Asks that stay risky even after a confirming call: even a real relative shouldn't need these.
+NEVER_SAFE_TO_DO = frozenset({"ask_secret", "ask_install", "fools_checker"})
 
 
 # Banks and government offices send SMS only from a registered sender name (DLT header) like
@@ -171,6 +173,11 @@ def decide(a: Answers) -> dict:
             verdict = "suspicious"
             reasons.append(CONFIRMED_NOTE)
         elif verdict == "not_sure":
+            verdict = "no_red_flags"
+            reasons.append(CONFIRMED_NOTE)
+        elif verdict == "suspicious" and not reasons and not keys & NEVER_SAFE_TO_DO:
+            # A low-scored request (Dad asking for money) the person has already checked by phone.
+            # Not when another quick answer raised it, or when it asks for something no one needs.
             verdict = "no_red_flags"
             reasons.append(CONFIRMED_NOTE)
 
