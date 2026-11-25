@@ -69,7 +69,7 @@ export const en = {
         body: "Paste the message, describe the call in your own words, or add a screenshot. Answer four quick questions if you can.",
       },
       {
-        title: "13 focused checks at once",
+        title: "14 focused checks at once",
         body: "Gemini Decision 1 asks what they want from you, how they push you, and who they say they are, all in one pass.",
       },
       {
